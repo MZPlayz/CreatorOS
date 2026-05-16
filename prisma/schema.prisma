@@ -1,0 +1,97 @@
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  role          Role      @default(USER)
+  clients       Client[]
+  projects      Project[]
+  invoices      Invoice[]
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+model Client {
+  id        String    @id @default(cuid())
+  name      String
+  email     String
+  ownerId   String
+  owner     User      @relation(fields: [ownerId], references: [id])
+  projects  Project[]
+  invoices  Invoice[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([ownerId])
+}
+
+model Project {
+  id          String    @id @default(cuid())
+  name        String
+  description String?
+  status      String    @default("ACTIVE") // ACTIVE, COMPLETED, ARCHIVED
+  clientId    String
+  client      Client    @relation(fields: [clientId], references: [id])
+  ownerId     String
+  owner       User      @relation(fields: [ownerId], references: [id])
+  invoices    Invoice[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([clientId])
+  @@index([ownerId])
+}
+
+model Invoice {
+  id            String         @id @default(cuid())
+  number        String         @unique
+  amount        Float
+  status        InvoiceStatus  @default(DRAFT)
+  dueDate       DateTime
+  projectId     String?
+  project       Project?       @relation(fields: [projectId], references: [id])
+  clientId      String
+  client        Client         @relation(fields: [clientId], references: [id])
+  ownerId       String
+  owner         User           @relation(fields: [ownerId], references: [id])
+  reconciledAt  DateTime?
+  transactions  BankTransaction[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@index([projectId])
+  @@index([clientId])
+  @@index([ownerId])
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  OVERDUE
+  VOID
+}
+
+model BankTransaction {
+  id              String   @id @default(cuid())
+  amount          Float
+  date            DateTime
+  description     String
+  reference       String?
+  reconciled      Boolean  @default(false)
+  invoiceId       String?
+  invoice         Invoice? @relation(fields: [invoiceId], references: [id])
+  createdAt       DateTime @default(now())
+}
