@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { toast } from "sonner";
-import { RefreshCcw, Hand } from "lucide-react";
+import { RefreshCcw, Hand, Search, AlertTriangle } from "lucide-react";
 
 interface AuditDrawerProps {
   transactionId: string | null;
@@ -12,6 +12,11 @@ export function AuditDrawer({ transactionId, onClose }: AuditDrawerProps) {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [manualInvoiceId, setManualInvoiceId] = useState("");
+  
+  // Fuzzy Search State
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [selectedInvoice, setSelectedInvoice] = useState<any>(null);
 
   useEffect(() => {
     if (transactionId) {
@@ -21,9 +26,36 @@ export function AuditDrawer({ transactionId, onClose }: AuditDrawerProps) {
         .then(res => {
           setData(res);
           setLoading(false);
+          // Auto-populate selected invoice if it was matched (but maybe not reconciled)
+          if (res.invoice) {
+              setSelectedInvoice(res.invoice);
+              setManualInvoiceId(res.invoice.id);
+          } else {
+              setSelectedInvoice(null);
+              setManualInvoiceId("");
+          }
+          setSearchQuery("");
         });
     }
   }, [transactionId]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (searchQuery.length >= 2) {
+        fetch(`/api/invoices/search?q=${searchQuery}`)
+          .then(res => res.json())
+          .then(data => {
+            setSearchResults(data);
+            if (data.length === 0 && !selectedInvoice) {
+              // No results
+            }
+          });
+      } else {
+        setSearchResults([]);
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   const handleRerun = async () => {
     try {
@@ -37,7 +69,7 @@ export function AuditDrawer({ transactionId, onClose }: AuditDrawerProps) {
 
   const handleManualOverride = async () => {
     if (!manualInvoiceId) {
-      toast.error("Please enter a valid Invoice ID");
+      toast.error("Please select a valid Invoice");
       return;
     }
     try {
@@ -52,6 +84,8 @@ export function AuditDrawer({ transactionId, onClose }: AuditDrawerProps) {
       toast.error("Override failed");
     }
   };
+
+  const hasMismatch = selectedInvoice && data ? Number(selectedInvoice.amount) !== Number(data.amount) : false;
 
   return (
     <Sheet open={!!transactionId} onOpenChange={(o) => !o && onClose()}>
@@ -101,6 +135,21 @@ export function AuditDrawer({ transactionId, onClose }: AuditDrawerProps) {
               </div>
             </div>
 
+            {/* Integrity Check */}
+            {hasMismatch && !data.reconciled && (
+               <div className="bg-red-950/80 border border-red-500/50 rounded flex items-start gap-3 p-3 text-red-500">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <h4 className="uppercase font-bold tracking-widest text-[11px] mb-1">Amount Mismatch Detected</h4>
+                    <p className="text-[10px] leading-relaxed text-red-400">
+                      Webhook reported: <strong className="text-red-300">${data.amount}</strong><br/>
+                      Invoice requires: <strong className="text-red-300">${selectedInvoice?.amount}</strong><br/>
+                      Integrity check failed. You must manually override or adjust the invoice to proceed.
+                    </p>
+                  </div>
+               </div>
+            )}
+
             {/* Manual Intervention Tools */}
             {!data.reconciled && (
               <div className="space-y-4 pt-4 border-t border-zinc-800">
@@ -110,15 +159,49 @@ export function AuditDrawer({ transactionId, onClose }: AuditDrawerProps) {
                   <RefreshCcw className="w-3 h-3" /> Re-run Agentic Cycle
                 </button>
 
-                <div className="flex gap-2 isolate pt-2">
-                  <input
-                    value={manualInvoiceId}
-                    onChange={(e) => setManualInvoiceId(e.target.value)}
-                    placeholder="Enter Invoice ID..."
-                    className="flex-1 bg-[#050505] border border-zinc-800 rounded px-2 text-zinc-300 placeholder-zinc-700 outline-none focus:border-amber-500/50"
-                  />
-                  <button onClick={handleManualOverride} className="flex items-center gap-2 bg-amber-500/10 text-amber-500 border border-amber-500/20 hover:bg-amber-500/20 px-3 rounded transition-colors">
-                    <Hand className="w-3 h-3" /> Override
+                <div className="space-y-2 pt-2 border-t border-zinc-800">
+                  <div className="relative isolate">
+                    <div className="absolute inset-y-0 left-2 flex items-center pointer-events-none">
+                       <Search className="w-3.5 h-3.5 text-zinc-500" />
+                    </div>
+                    <input
+                      value={searchQuery}
+                      onChange={(e) => {
+                         setSearchQuery(e.target.value);
+                         setSelectedInvoice(null);
+                         setManualInvoiceId("");
+                      }}
+                      placeholder="Search to Override (Name, ID)..."
+                      className="w-full bg-[#050505] border border-zinc-800 rounded px-8 py-2 text-zinc-300 placeholder-zinc-700 outline-none focus:border-amber-500/50"
+                    />
+                    
+                    {searchResults.length > 0 && !selectedInvoice && (
+                      <div className="absolute z-10 top-full left-0 right-0 mt-1 bg-[#0c0c0e] border border-zinc-800 rounded shadow-xl overflow-hidden max-h-48 overflow-y-auto">
+                        {searchResults.map((inv) => (
+                          <button
+                            key={inv.id}
+                            onClick={() => {
+                              setSelectedInvoice(inv);
+                              setManualInvoiceId(inv.id);
+                              setSearchQuery(`${inv.clientName} - $${inv.amount}`);
+                              setSearchResults([]);
+                            }}
+                            className="w-full text-left px-3 py-2 hover:bg-zinc-800 border-b border-zinc-800/50 last:border-0 flex justify-between items-center group"
+                          >
+                            <span className="text-zinc-300 group-hover:text-amber-400">{inv.clientName} <span className="text-zinc-500 text-[10px] ml-2">({inv.id.substring(0,8)}...)</span></span>
+                            <span className="text-zinc-400 font-bold">${inv.amount}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  
+                  <button 
+                     onClick={handleManualOverride} 
+                     disabled={!manualInvoiceId || hasMismatch}
+                     className="w-full flex items-center justify-center gap-2 bg-amber-500/10 text-amber-500 border border-amber-500/20 hover:bg-amber-500/20 py-2 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                   >
+                    <Hand className="w-3 h-3" /> Finalize Override
                   </button>
                 </div>
                 

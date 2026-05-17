@@ -15,6 +15,8 @@ const stats = [
 export default function OverviewPage() {
   const [transactions, setTransactions] = useState<any[]>([]);
   const [selectedTxId, setSelectedTxId] = useState<string | null>(null);
+  const [dbLatency, setDbLatency] = useState<number>(14);
+  const [latencyHistory, setLatencyHistory] = useState<number[]>([2,3,4,6,5,3,4,2,1,4,6,4,3,2]);
 
   const fetchTransactions = () => {
     fetch("/api/transactions")
@@ -24,17 +26,34 @@ export default function OverviewPage() {
       });
   };
 
+  const pingDb = () => {
+    fetch("/api/health/db")
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.latencyMs) {
+           setDbLatency(data.latencyMs);
+           // Calculate a "height scale" 1-10 string based on latency relative to 50ms
+           const h = Math.max(1, Math.min(10, Math.ceil(data.latencyMs / 5)));
+           setLatencyHistory(prev => [...prev.slice(-13), h]);
+        }
+      })
+      .catch(() => {});
+  };
+
   useEffect(() => {
     fetchTransactions();
+    pingDb();
     
     const handleSyncComplete = () => fetchTransactions();
     window.addEventListener("ai_reconciliation_complete", handleSyncComplete);
     
     // Poll loosely
     const intervalId = setInterval(fetchTransactions, 3000);
+    const pingId = setInterval(pingDb, 30000);
     return () => {
       window.removeEventListener("ai_reconciliation_complete", handleSyncComplete);
       clearInterval(intervalId);
+      clearInterval(pingId);
     };
   }, []);
 
@@ -70,48 +89,48 @@ export default function OverviewPage() {
             </div>
           </div>
           <div className="flex-1 overflow-auto p-0">
-            <table className="w-full text-left text-[11px] font-mono min-w-[600px] border-collapse">
+            <table className="w-full text-left text-xs font-mono min-w-[600px] border-collapse">
               <thead className="bg-[#050505] sticky top-0">
                 <tr className="text-zinc-500 border-b border-zinc-800">
-                  <th className="px-4 py-2 font-normal whitespace-nowrap">TIMESTAMP</th>
-                  <th className="px-4 py-2 font-normal">DATA SOURCE</th>
-                  <th className="px-4 py-2 font-normal">AMOUNT</th>
-                  <th className="px-4 py-2 font-normal">MATCH CONF.</th>
-                  <th className="px-4 py-2 font-normal text-right">STATUS</th>
+                  <th className="px-3 py-2 font-normal whitespace-nowrap">TIMESTAMP</th>
+                  <th className="px-3 py-2 font-normal">DATA SOURCE</th>
+                  <th className="px-3 py-2 font-normal">AMOUNT</th>
+                  <th className="px-3 py-2 font-normal">MATCH CONF.</th>
+                  <th className="px-3 py-2 font-normal text-right">STATUS</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-800/40">
                 {transactions.map((tx) => (
                   <tr key={tx.id} onClick={() => setSelectedTxId(tx.id)} className="hover:bg-zinc-800/40 transition-colors cursor-pointer group">
-                    <td className="px-4 py-3 text-zinc-500 whitespace-nowrap">
+                    <td className="px-3 py-2 text-zinc-500 whitespace-nowrap">
                       {new Date(tx.createdAt).toISOString().split('T')[1].slice(0, 8)}
                     </td>
-                    <td className="px-4 py-3">{tx.description.substring(0, 20)}</td>
-                    <td className="px-4 py-3 text-emerald-400 font-bold">${tx.amount.toFixed(2)}</td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-2 text-zinc-300">{tx.description.substring(0, 20)}</td>
+                    <td className="px-3 py-2 text-zinc-300">${tx.amount.toFixed(2)}</td>
+                    <td className="px-3 py-2">
                       {tx.reconciled && tx.confidenceScore ? (
                         <div className="flex items-center gap-2">
-                          <div className="w-16 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-                            <div className={cn("h-full", tx.confidenceScore > 0.85 ? "bg-indigo-500" : "bg-amber-500")} style={{ width: `${Math.max(10, tx.confidenceScore * 100)}%` }}></div>
+                          <div className="w-12 h-1 bg-zinc-800 rounded-full overflow-hidden">
+                            <div className={cn("h-full", tx.confidenceScore > 0.85 ? "bg-indigo-500" : "bg-zinc-500")} style={{ width: `${Math.max(10, tx.confidenceScore * 100)}%` }}></div>
                           </div>
-                          <span>{(tx.confidenceScore * 100).toFixed(1)}%</span>
+                          <span className="text-[10px] text-zinc-400">{(tx.confidenceScore * 100).toFixed(0)}%</span>
                         </div>
                       ) : (
                          <span className="text-zinc-600">--</span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-right">
+                    <td className="px-3 py-2 text-right">
                        {tx.reconciled ? (
-                         <span className="text-emerald-500 uppercase text-[9px] font-bold border border-emerald-500/20 px-2 py-1 bg-emerald-500/10 rounded">Resolved</span>
+                         <span className="text-emerald-500 uppercase text-[9px] font-bold">Resolved</span>
                        ) : (
-                         <span className="text-amber-500 uppercase text-[9px] font-bold border border-amber-500/20 px-2 py-1 bg-amber-500/10 rounded animate-pulse">Pending</span>
+                         <span className="text-zinc-500 uppercase text-[9px] font-bold">Pending</span>
                        )}
                     </td>
                   </tr>
                 ))}
                 {transactions.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-4 py-8 text-center text-zinc-600">No transactions in queue. Run a simulation.</td>
+                    <td colSpan={5} className="px-3 py-6 text-center text-zinc-600 border-b border-zinc-800/40">No transactions in queue. Run a simulation.</td>
                   </tr>
                 )}
               </tbody>
@@ -147,23 +166,12 @@ export default function OverviewPage() {
               <div>
                 <div className="flex justify-between text-[11px] mb-1.5">
                   <span className="text-zinc-400">API Performance</span>
-                  <span className="text-white font-mono">14ms</span>
+                  <span className="text-white font-mono">{dbLatency}ms</span>
                 </div>
                 <div className="flex gap-0.5 h-6 items-end">
-                  <div className="w-1 bg-indigo-500/20 h-2"></div>
-                  <div className="w-1 bg-indigo-500/20 h-3"></div>
-                  <div className="w-1 bg-indigo-500/20 h-4"></div>
-                  <div className="w-1 bg-indigo-500/60 h-6"></div>
-                  <div className="w-1 bg-indigo-500/60 h-5"></div>
-                  <div className="w-1 bg-indigo-500/40 h-3"></div>
-                  <div className="w-1 bg-indigo-500/40 h-4"></div>
-                  <div className="w-1 bg-indigo-500/80 h-2"></div>
-                  <div className="w-1 bg-indigo-500/20 h-1"></div>
-                  <div className="w-1 bg-indigo-500/60 h-4"></div>
-                  <div className="w-1 bg-indigo-500/90 h-6"></div>
-                  <div className="w-1 bg-indigo-500/20 h-4"></div>
-                  <div className="w-1 bg-indigo-500/20 h-3"></div>
-                  <div className="w-1 bg-indigo-500/10 h-2"></div>
+                  {latencyHistory.map((h, i) => (
+                    <div key={i} className={`w-1 bg-indigo-500/${Math.min(90, Math.max(10, h * 10))} transition-all duration-300`} style={{ height: `${h * 8}%` }}></div>
+                   ))}
                 </div>
               </div>
               <div className="pt-4 border-t border-zinc-800">

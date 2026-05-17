@@ -158,6 +158,44 @@ async function startServer() {
     }, 0);
   });
 
+  app.get("/api/health/db", async (req, res) => {
+    try {
+        const start = performance.now();
+        await req.prisma.$queryRaw`SELECT 1`;
+        const end = performance.now();
+        res.json({ latencyMs: Math.round(end - start) });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/invoices/search", async (req, res) => {
+    const q = req.query.q as string;
+    if (!q) {
+      return res.json([]);
+    }
+    try {
+      const invoices = await req.prisma.invoice.findMany({
+        where: {
+          OR: [
+            { id: { contains: q, mode: 'insensitive' } },
+            { number: { contains: q, mode: 'insensitive' } },
+            { client: { name: { contains: q, mode: 'insensitive' } } }
+          ],
+        },
+        include: {
+          client: true
+        },
+        take: 10
+      });
+      // Map it out to standard format for frontend
+      const mapped = invoices.map(i => ({ ...i, clientName: i.client.name }));
+      res.json(mapped);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get("/api/transactions", async (req, res) => {
     try {
         const transactions = await req.prisma.bankTransaction.findMany({
@@ -175,9 +213,12 @@ async function startServer() {
     try {
         const transaction = await req.prisma.bankTransaction.findUnique({
             where: { id: transactionId },
-            include: { logs: { orderBy: { timestamp: 'asc' } } }
+            include: { logs: { orderBy: { timestamp: 'asc' } }, invoice: { include: { client: true } } }
         });
         if (!transaction) return res.status(404).json({ error: "Not Found" });
+        if (transaction.invoice) {
+            (transaction.invoice as any).clientName = (transaction.invoice as any).client.name;
+        }
         res.json(transaction);
     } catch (err: any) {
         res.status(500).json({ error: err.message });
