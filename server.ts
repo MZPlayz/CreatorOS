@@ -123,6 +123,28 @@ async function startServer() {
   app.post("/api/ai/reconcile", async (req, res) => {
     const { transaction } = req.body;
     
+    try {
+        await req.prisma.bankTransaction.upsert({
+            where: { id: transaction.id },
+            update: {
+                amount: transaction.amount,
+                description: transaction.description,
+                reference: transaction.reference,
+                rawMetadata: transaction
+            },
+            create: {
+                id: transaction.id,
+                amount: transaction.amount,
+                date: new Date(),
+                description: transaction.description,
+                reference: transaction.reference,
+                rawMetadata: transaction
+            }
+        });
+    } catch(e) {
+        console.error("Failed to upsert simulation tx", e);
+    }
+
     // Ack immediately to frontend queue
     res.json({ status: "queued", transactionId: transaction.id });
     
@@ -134,6 +156,86 @@ async function startServer() {
         transactionId: transaction.id
       });
     }, 0);
+  });
+
+  app.get("/api/transactions", async (req, res) => {
+    try {
+        const transactions = await req.prisma.bankTransaction.findMany({
+            orderBy: { createdAt: 'desc' },
+            take: 20
+        });
+        res.json(transactions);
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/transactions/:id", async (req, res) => {
+    const transactionId = req.params.id;
+    try {
+        const transaction = await req.prisma.bankTransaction.findUnique({
+            where: { id: transactionId },
+            include: { logs: { orderBy: { timestamp: 'asc' } } }
+        });
+        if (!transaction) return res.status(404).json({ error: "Not Found" });
+        res.json(transaction);
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/transactions/:id/rerun", async (req, res) => {
+    const transactionId = req.params.id;
+    
+    // Clear logs and status
+    await req.prisma.bankTransaction.update({
+        where: { id: transactionId },
+        data: {
+             reconciled: false,
+             confidenceScore: null,
+             invoiceId: null,
+             logs: { deleteMany: {} }
+        }
+    });
+
+    res.json({ status: "queued", transactionId });
+    
+    setTimeout(async () => {
+      const { aiQueue } = await import("./src/features/ai/services/QueueProcessor.js");
+      aiQueue.add({
+        id: `job-${Date.now()}`,
+        transactionId
+      });
+    }, 0);
+  });
+
+  app.post("/api/transactions/:id/override", async (req, res) => {
+    const transactionId = req.params.id;
+    const { invoiceId } = req.body;
+
+    await req.prisma.$transaction(async (tx) => {
+        await tx.bankTransaction.update({
+            where: { id: transactionId },
+            data: {
+                reconciled: true,
+                invoiceId: invoiceId,
+                confidenceScore: 1.0,
+            }
+        });
+        await tx.invoice.update({
+            where: { id: invoiceId },
+            data: { status: 'RECONCILED' }
+        });
+        await tx.reconcilerLog.create({
+            data: {
+                transactionId,
+                level: 'INFO',
+                message: `Manual Override Applied. Matched to Invoice: ${invoiceId}`
+            }
+        });
+    });
+
+    res.json({ success: true, transactionId, invoiceId });
   });
 
   // Vite middleware for development

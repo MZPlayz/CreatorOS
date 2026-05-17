@@ -1,7 +1,9 @@
 import * as React from "react";
+import { useEffect, useState } from "react";
 import { motion } from "motion/react";
 import { cn } from "@/lib/utils";
 import { Zap } from "lucide-react";
+import { AuditDrawer } from "../components/AuditDrawer";
 
 const stats = [
   { label: "Annual Recurring Revenue", value: "$184,200.00", trend: "+12.4%", trendColor: "text-emerald-400" },
@@ -11,8 +13,34 @@ const stats = [
 ];
 
 export default function OverviewPage() {
+  const [transactions, setTransactions] = useState<any[]>([]);
+  const [selectedTxId, setSelectedTxId] = useState<string | null>(null);
+
+  const fetchTransactions = () => {
+    fetch("/api/transactions")
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) setTransactions(data);
+      });
+  };
+
+  useEffect(() => {
+    fetchTransactions();
+    
+    const handleSyncComplete = () => fetchTransactions();
+    window.addEventListener("ai_reconciliation_complete", handleSyncComplete);
+    
+    // Poll loosely
+    const intervalId = setInterval(fetchTransactions, 3000);
+    return () => {
+      window.removeEventListener("ai_reconciliation_complete", handleSyncComplete);
+      clearInterval(intervalId);
+    };
+  }, []);
+
   return (
     <div className="space-y-6">
+      <AuditDrawer transactionId={selectedTxId} onClose={() => { setSelectedTxId(null); fetchTransactions(); }} />
       {/* Top Stats Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 lg:h-24">
         {stats.map((stat, i) => (
@@ -34,85 +62,58 @@ export default function OverviewPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 lg:h-[500px]">
         {/* AI Reconciliation Log (High Density) */}
-        <div className="lg:col-span-2 border border-zinc-800 rounded-xl bg-zinc-900/20 flex flex-col">
-          <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between">
+        <div className="lg:col-span-2 border border-zinc-800 rounded-xl bg-zinc-900/20 flex flex-col overflow-hidden">
+          <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between bg-[#0c0c0e]">
             <div className="flex items-center gap-2">
               <span className="text-xs font-bold uppercase tracking-wider">Agentic Workflow Queue</span>
               <span className="px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-500 text-[10px] border border-emerald-500/20 font-medium">Real-time Active</span>
             </div>
-            <div className="text-[10px] text-zinc-500 flex gap-4 hidden sm:flex">
-              <span>Batch: #X92-004</span>
-              <span>Latency: 42ms</span>
-            </div>
           </div>
           <div className="flex-1 overflow-auto p-0">
-            <table className="w-full text-left text-[11px] font-mono min-w-[600px]">
-              <thead>
-                <tr className="text-zinc-500 border-b border-zinc-800/50">
-                  <th className="px-4 py-2 font-normal">TIMESTAMP</th>
-                  <th className="px-4 py-2 font-normal">SOURCE</th>
-                  <th className="px-4 py-2 font-normal">OBJECT</th>
-                  <th className="px-4 py-2 font-normal">MATCH CONFIDENCE</th>
+            <table className="w-full text-left text-[11px] font-mono min-w-[600px] border-collapse">
+              <thead className="bg-[#050505] sticky top-0">
+                <tr className="text-zinc-500 border-b border-zinc-800">
+                  <th className="px-4 py-2 font-normal whitespace-nowrap">TIMESTAMP</th>
+                  <th className="px-4 py-2 font-normal">DATA SOURCE</th>
+                  <th className="px-4 py-2 font-normal">AMOUNT</th>
+                  <th className="px-4 py-2 font-normal">MATCH CONF.</th>
                   <th className="px-4 py-2 font-normal text-right">STATUS</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-800/40">
-                <tr className="hover:bg-zinc-800/30 transition-colors">
-                  <td className="px-4 py-3 text-zinc-500">14:22:10.04</td>
-                  <td className="px-4 py-3">Stripe_WebHook</td>
-                  <td className="px-4 py-3 text-indigo-400">INV-2026-904</td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <div className="w-16 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-                        <div className="w-[98%] h-full bg-indigo-500"></div>
-                      </div>
-                      <span>98.4%</span>
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-right"><span className="text-emerald-500 uppercase text-[9px] font-bold">Auto-Matched</span></td>
-                </tr>
-                <tr className="hover:bg-zinc-800/30 transition-colors">
-                  <td className="px-4 py-3 text-zinc-500">14:21:44.82</td>
-                  <td className="px-4 py-3">Mercury_Bank</td>
-                  <td className="px-4 py-3 text-indigo-400">TRANX_FE_67</td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <div className="w-16 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-                        <div className="w-[82%] h-full bg-amber-500"></div>
-                      </div>
-                      <span>82.1%</span>
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-right"><span className="text-amber-500 uppercase text-[9px] font-bold">In_Review</span></td>
-                </tr>
-                <tr className="hover:bg-zinc-800/30 transition-colors">
-                  <td className="px-4 py-3 text-zinc-500">14:19:02.11</td>
-                  <td className="px-4 py-3">AWS_Cloudwatch</td>
-                  <td className="px-4 py-3 text-indigo-400">SVC_USAGE_METRIC</td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <div className="w-16 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-                        <div className="w-[100%] h-full bg-indigo-500"></div>
-                      </div>
-                      <span>100%</span>
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-right"><span className="text-emerald-500 uppercase text-[9px] font-bold">Sync_Complete</span></td>
-                </tr>
-                <tr className="hover:bg-zinc-800/30 transition-colors">
-                  <td className="px-4 py-3 text-zinc-500">14:15:30.99</td>
-                  <td className="px-4 py-3">GCP_Compute</td>
-                  <td className="px-4 py-3 text-indigo-400">NODE_AUTOSCALE</td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <div className="w-16 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-                        <div className="w-[95%] h-full bg-indigo-500"></div>
-                      </div>
-                      <span>95.0%</span>
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-right"><span className="text-emerald-500 uppercase text-[9px] font-bold">Resolved</span></td>
-                </tr>
+                {transactions.map((tx) => (
+                  <tr key={tx.id} onClick={() => setSelectedTxId(tx.id)} className="hover:bg-zinc-800/40 transition-colors cursor-pointer group">
+                    <td className="px-4 py-3 text-zinc-500 whitespace-nowrap">
+                      {new Date(tx.createdAt).toISOString().split('T')[1].slice(0, 8)}
+                    </td>
+                    <td className="px-4 py-3">{tx.description.substring(0, 20)}</td>
+                    <td className="px-4 py-3 text-emerald-400 font-bold">${tx.amount.toFixed(2)}</td>
+                    <td className="px-4 py-3">
+                      {tx.reconciled && tx.confidenceScore ? (
+                        <div className="flex items-center gap-2">
+                          <div className="w-16 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                            <div className={cn("h-full", tx.confidenceScore > 0.85 ? "bg-indigo-500" : "bg-amber-500")} style={{ width: `${Math.max(10, tx.confidenceScore * 100)}%` }}></div>
+                          </div>
+                          <span>{(tx.confidenceScore * 100).toFixed(1)}%</span>
+                        </div>
+                      ) : (
+                         <span className="text-zinc-600">--</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                       {tx.reconciled ? (
+                         <span className="text-emerald-500 uppercase text-[9px] font-bold border border-emerald-500/20 px-2 py-1 bg-emerald-500/10 rounded">Resolved</span>
+                       ) : (
+                         <span className="text-amber-500 uppercase text-[9px] font-bold border border-amber-500/20 px-2 py-1 bg-amber-500/10 rounded animate-pulse">Pending</span>
+                       )}
+                    </td>
+                  </tr>
+                ))}
+                {transactions.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="px-4 py-8 text-center text-zinc-600">No transactions in queue. Run a simulation.</td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -131,10 +132,11 @@ export default function OverviewPage() {
                 })
               });
               console.log("Queued worker:", await res.json());
+              fetchTransactions();
             }}
-            className="w-full bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 hover:border-zinc-700 text-zinc-100 font-medium py-3 rounded-xl transition-all shadow-sm flex items-center justify-center gap-2"
+            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 rounded-xl transition-all shadow-sm flex items-center justify-center gap-2"
           >
-            <Zap className="w-4 h-4 text-emerald-400" /> Simulate Stripe Webhook (Trigger AI)
+            <Zap className="w-4 h-4 text-emerald-200" /> Simulate Webhook
           </button>
           <div className="border border-zinc-800 rounded-xl bg-[#0c0c0e] p-5">
             <div className="flex items-center justify-between mb-4">

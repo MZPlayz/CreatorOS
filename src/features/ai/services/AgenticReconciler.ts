@@ -37,28 +37,41 @@ export class AgenticReconciler {
         }) as unknown as PrismaClient;
     }
 
-    private log(message: string) {
-        console.log(`[AgenticReconciler] ${message}`);
+    private async log(transactionId: string, level: 'INFO' | 'WARN' | 'ERROR', message: string) {
+        console.log(`[AgenticReconciler][${transactionId}] ${level}: ${message}`);
+        
+        try {
+            await this.db.reconcilerLog.create({
+                data: {
+                    transactionId,
+                    level,
+                    message,
+                }
+            });
+        } catch (e) {
+            console.error("Failed to persist ReconcilerLog", e);
+        }
+
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const { systemEvents } = require("../../../../server");
-        systemEvents.emit("sse_broadcast", "agent_log", { timestamp: Date.now(), message });
+        systemEvents.emit("sse_broadcast", "agent_log", { transactionId, timestamp: Date.now(), level, message });
     }
 
     async processTransaction(transactionId: string) {
-        this.log(`Starting reconciliation worker for TX: ${transactionId}`);
+        await this.log(transactionId, 'INFO', `Starting reconciliation worker for TX: ${transactionId}`);
 
         try {
-            this.log(`Fetching bank transaction data...`);
+            await this.log(transactionId, 'INFO', `Fetching bank transaction data...`);
             const transaction = await this.db.bankTransaction.findUnique({
                 where: { id: transactionId }
             });
 
             if (!transaction || transaction.reconciled) {
-               this.log(`Transaction ${transactionId} not found or already reconciled.`);
+               await this.log(transactionId, 'WARN', `Transaction not found or already reconciled.`);
                return { success: false, reason: 'invalid_transaction' };
             }
 
-            this.log(`Gathering open invoices for context matching...`);
+            await this.log(transactionId, 'INFO', `Parsed amount: $${transaction.amount}. Searching open invoices for matching amounts...`);
             const openInvoices = await this.db.invoice.findMany({
                 where: { 
                    status: { in: ['DRAFT', 'SENT', 'OVERDUE'] } 
@@ -67,11 +80,11 @@ export class AgenticReconciler {
             });
 
             if (openInvoices.length === 0) {
-               this.log(`No open invoices available for matched context.`);
+               await this.log(transactionId, 'WARN', `No open invoices available for matched context.`);
                return { success: false, reason: 'no_open_invoices' };
             }
 
-            this.log(`Invoking Gemini 3.1 Pro for deterministic matching...`);
+            await this.log(transactionId, 'INFO', `Invoking Gemini 3.1 Pro for deterministic matching...`);
             const prompt = `
             You are an Agentic Financial Reconciler. Match the incoming bank transaction to the correct open invoice.
             Verify that the amounts strictly match. If the amounts do not match, or if there is no confident match, decline.
@@ -107,7 +120,6 @@ export class AgenticReconciler {
                 });
                 result = JSON.parse(response.text || "{}");
             } else {
-                 // Mock result favoring the first open invoice with exact amount to simulate the workflow
                  const mockMatch = openInvoices.find(inv => Number(inv.amount) === Number(transaction.amount));
                  if (mockMatch) {
                      result = { matchId: mockMatch.id, confidence: 0.98, reasoning: `Exact amount match of ${mockMatch.amount} and plausible reference.` };
@@ -116,10 +128,11 @@ export class AgenticReconciler {
                  }
             }
 
-            this.log(`Gemini response received. Confidence: ${result.confidence}. Reason: ${result.reasoning}`);
-
             if (result.matchId && result.confidence > 0.85) {
-                this.log(`High confidence match validated. Verification step executing...`);
+                await this.log(transactionId, 'INFO', `High confidence match validated (Conf: ${(result.confidence*100).toFixed(1)}%). Verification step executing...`);
+                // Delay for visual effect
+                await new Promise(r => setTimeout(r, 400));
+                
                 const matchedInvoice = openInvoices.find(i => i.id === result.matchId);
                 
                 if (matchedInvoice && Number(matchedInvoice.amount) === Number(transaction.amount)) {
@@ -148,19 +161,19 @@ export class AgenticReconciler {
                         reasoning: result.reasoning
                     });
                     
-                    this.log(`Successfully reconciled TX ${transactionId} with Invoice ${matchedInvoice.number}`);
+                    await this.log(transactionId, 'INFO', `Successfully reconciled TX array with Invoice ${matchedInvoice.number}`);
                     return { success: true, matchId: result.matchId, confidence: result.confidence, reasoning: result.reasoning };
                 } else {
-                    this.log(`Validation failed: Amount mismatch between TX (${transaction.amount}) and matched Invoice (${matchedInvoice?.amount}).`);
+                    await this.log(transactionId, 'ERROR', `Validation failed: Amount mismatch between TX (${transaction.amount}) and matched Invoice (${matchedInvoice?.amount}).`);
                     return { success: false, reason: 'amount_mismatch', confidence: result.confidence };
                 }
             }
             
-            this.log(`No confident match found. Requires manual human review.`);
+            await this.log(transactionId, 'WARN', `No confident match found. Requires manual human review. Reasoning: ${result.reasoning}`);
             return { success: false, reason: 'low_confidence', confidence: result.confidence };
 
         } catch (error: any) {
-            this.log(`Critical Failure: ${error.message}`);
+            await this.log(transactionId, 'ERROR', `Critical Failure: ${error.message}`);
             return { success: false, error: error.message };
         }
     }

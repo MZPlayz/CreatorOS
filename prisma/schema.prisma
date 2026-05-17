@@ -95,5 +95,24 @@ model BankTransaction {
   confidenceScore Float?
   invoiceId       String?
   invoice         Invoice? @relation(fields: [invoiceId], references: [id])
+  rawMetadata     Json?
+  logs            ReconcilerLog[]
   createdAt       DateTime @default(now())
+}
+
+model ReconcilerLog {
+  id            String          @id @default(cuid())
+  transactionId String
+  transaction   BankTransaction @relation(fields: [transactionId], references: [id])
+  level         LogLevel        @default(INFO)
+  message       String
+  timestamp     DateTime        @default(now())
+  
+  @@index([transactionId])
+}
+
+enum LogLevel {
+  INFO
+  WARN
+  ERROR
 }
