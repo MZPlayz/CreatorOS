@@ -2,13 +2,14 @@ import React, { useEffect, useState } from "react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { toast } from "sonner";
 import { RefreshCcw, Hand, Search, AlertTriangle } from "lucide-react";
+import { TerminalCore } from "./TerminalCore";
+import { cn } from "@/lib/utils";
+import { useWorkflowStore } from "../store/useWorkflowStore";
 
-interface AuditDrawerProps {
-  transactionId: string | null;
-  onClose: () => void;
-}
+export function ManualOverrideDrawer() {
+  const { selectedTransactionId, setSelectedTransactionId, setTransactions } = useWorkflowStore();
+  const transactionId = selectedTransactionId;
 
-export function AuditDrawer({ transactionId, onClose }: AuditDrawerProps) {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [manualInvoiceId, setManualInvoiceId] = useState("");
@@ -26,7 +27,7 @@ export function AuditDrawer({ transactionId, onClose }: AuditDrawerProps) {
         .then(res => {
           setData(res);
           setLoading(false);
-          // Auto-populate selected invoice if it was matched (but maybe not reconciled)
+          // Auto-populate selected invoice if it was matched
           if (res.invoice) {
               setSelectedInvoice(res.invoice);
               setManualInvoiceId(res.invoice.id);
@@ -46,9 +47,6 @@ export function AuditDrawer({ transactionId, onClose }: AuditDrawerProps) {
           .then(res => res.json())
           .then(data => {
             setSearchResults(data);
-            if (data.length === 0 && !selectedInvoice) {
-              // No results
-            }
           });
       } else {
         setSearchResults([]);
@@ -61,7 +59,8 @@ export function AuditDrawer({ transactionId, onClose }: AuditDrawerProps) {
     try {
       await fetch(`/api/transactions/${transactionId}/rerun`, { method: "POST" });
       toast.success("Agent queued for re-run");
-      onClose();
+      setSelectedTransactionId(null);
+      // Trigger a refetch in OverviewPage or wait for poll
     } catch (e) {
       toast.error("Failed to rerun");
     }
@@ -79,22 +78,32 @@ export function AuditDrawer({ transactionId, onClose }: AuditDrawerProps) {
         body: JSON.stringify({ invoiceId: manualInvoiceId })
       });
       toast.success("Manual override applied");
-      onClose();
+      setSelectedTransactionId(null);
     } catch (e) {
       toast.error("Override failed");
     }
   };
 
+  const onClose = () => setSelectedTransactionId(null);
   const hasMismatch = selectedInvoice && data ? Number(selectedInvoice.amount) !== Number(data.amount) : false;
 
   return (
-    <Sheet open={!!transactionId} onOpenChange={(o) => !o && onClose()}>
+    <Sheet open={!!transactionId} onOpenChange={(o) => (!o ? onClose() : null)}>
       <SheetContent className="bg-[#09090b] border-l border-zinc-800 text-zinc-100 sm:max-w-xl p-0 flex flex-col font-mono text-[11px]">
         <SheetHeader className="p-4 border-b border-zinc-800">
-          <SheetTitle className="text-zinc-100 font-mono text-sm uppercase tracking-widest flex items-center gap-2">
-            Audit Trail
-            {data?.reconciled && <span className="px-1.5 py-0.5 bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 text-[10px] rounded uppercase">Resolved</span>}
-            {data && !data.reconciled && <span className="px-1.5 py-0.5 bg-amber-500/10 text-amber-500 border border-amber-500/20 text-[10px] rounded uppercase">Pending</span>}
+          <SheetTitle className="text-zinc-100 font-mono text-sm uppercase tracking-widest flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              Audit Trail
+              {data?.reconciled && <span className="px-1.5 py-0.5 bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 text-[10px] rounded uppercase">Resolved</span>}
+              {data && !data.reconciled && <span className="px-1.5 py-0.5 bg-amber-500/10 text-amber-500 border border-amber-500/20 text-[10px] rounded uppercase">Pending</span>}
+            </div>
+            {data?.confidenceScore != null && (
+              <div className="text-[10px] font-bold text-zinc-400">
+                MATCH: <span className={cn(data.confidenceScore > 0.85 ? "text-indigo-400" : "text-amber-400")}>
+                  {(data.confidenceScore * 100).toFixed(1)}%
+                </span>
+              </div>
+            )}
           </SheetTitle>
         </SheetHeader>
 
@@ -118,23 +127,6 @@ export function AuditDrawer({ transactionId, onClose }: AuditDrawerProps) {
               </div>
             </div>
 
-            {/* Audit Logs */}
-            <div className="space-y-2 flex-1">
-              <div className="text-zinc-500 uppercase font-bold tracking-widest text-[10px]">Micro-Logs</div>
-              <div className="bg-[#050505] border border-zinc-800 rounded h-64 overflow-y-auto p-2 space-y-1">
-                {data.logs && data.logs.length > 0 ? data.logs.map((log: any) => (
-                  <div key={log.id} className="flex gap-2">
-                    <span className="text-zinc-600 w-16 flex-shrink-0">{new Date(log.timestamp).toISOString().split('T')[1].slice(0, 8)}</span>
-                    <span className={`flex-1 ${log.level === 'ERROR' ? 'text-red-400' : log.level === 'WARN' ? 'text-amber-400' : 'text-zinc-300'}`}>
-                      {log.message}
-                    </span>
-                  </div>
-                )) : (
-                  <div className="text-zinc-600 italic">No logs available for this transaction.</div>
-                )}
-              </div>
-            </div>
-
             {/* Integrity Check */}
             {hasMismatch && !data.reconciled && (
                <div className="bg-red-950/80 border border-red-500/50 rounded flex items-start gap-3 p-3 text-red-500">
@@ -149,6 +141,12 @@ export function AuditDrawer({ transactionId, onClose }: AuditDrawerProps) {
                   </div>
                </div>
             )}
+
+            {/* Audit Logs */}
+            <div className="space-y-2 flex-1">
+              <div className="text-zinc-500 uppercase font-bold tracking-widest text-[10px]">Micro-Logs</div>
+              <TerminalCore logs={data.logs || []} />
+            </div>
 
             {/* Manual Intervention Tools */}
             {!data.reconciled && (
