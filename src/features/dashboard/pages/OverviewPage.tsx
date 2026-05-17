@@ -1,6 +1,7 @@
 import * as React from "react";
 import { motion } from "motion/react";
 import { cn } from "@/lib/utils";
+import { Zap } from "lucide-react";
 
 const stats = [
   { label: "Annual Recurring Revenue", value: "$184,200.00", trend: "+12.4%", trendColor: "text-emerald-400" },
