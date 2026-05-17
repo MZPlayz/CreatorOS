@@ -2,13 +2,19 @@ import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { fileURLToPath } from "url";
+import pg from "pg";
+import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, Prisma } from "@prisma/client";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const connectionString = process.env.DATABASE_URL || "postgres://dummy:dummy@localhost:5432/dummy";
+const pool = new pg.Pool({ connectionString });
+const adapter = new PrismaPg(pool);
+
 // Global Admin Client (No RLS) -> Used ONLY for systemic tasks or verify-checks 
-export const prismaAdmin = new PrismaClient();
+export const prismaAdmin = new PrismaClient({ adapter });
 
 import { AsyncLocalStorage } from "async_hooks";
 import { EventEmitter } from "events";
@@ -120,12 +126,13 @@ async function startServer() {
     // Ack immediately to frontend queue
     res.json({ status: "queued", transactionId: transaction.id });
     
-    // Asynchronously call the actual worker process
+    // Asynchronously call the actual worker process via true queue architecture
     setTimeout(async () => {
-      // Lazy load to avoid circular dependencies during boot
-      const { AgenticReconciler } = await import("./src/features/ai/services/AgenticReconciler.js");
-      const reconciler = new AgenticReconciler();
-      await reconciler.processTransaction(transaction.id);
+      const { aiQueue } = await import("./src/features/ai/services/QueueProcessor.js");
+      aiQueue.add({
+        id: `job-${Date.now()}`,
+        transactionId: transaction.id
+      });
     }, 0);
   });
 

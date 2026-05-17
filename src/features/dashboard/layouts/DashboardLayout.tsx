@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 import { CommandMenu } from "@/features/dashboard/components/CommandMenu";
 import { Button } from "@/components/ui/button";
 import { NewInvoiceSheet } from "@/features/invoices/components/NewInvoiceSheet";
+import { LatencyMeter } from "@/features/dashboard/components/LatencyMeter";
 
 const navItems = [
   { label: "Dashboard", icon: LayoutDashboard, href: "/" },
@@ -48,7 +49,7 @@ export default function DashboardLayout() {
     eventSource.addEventListener("agent_log", (e) => {
       try {
         const data = JSON.parse(e.data);
-        setAgentLogs((prev) => [...prev, data].slice(-15)); // Keep last 15 logs
+        setAgentLogs((prev) => [...prev, data].slice(-100)); // Keep last 100 logs
       } catch (err) {}
     });
 
@@ -159,6 +160,9 @@ export default function DashboardLayout() {
           </AnimatePresence>
           <NewInvoiceSheet />
         </div>
+
+        {/* Latency Meter */}
+        <LatencyMeter />
 
         {/* Footer Status Bar */}
         <footer className="h-8 border-t border-zinc-800 bg-[#09090b] flex items-center justify-between px-4 text-[10px] text-zinc-500 font-mono">

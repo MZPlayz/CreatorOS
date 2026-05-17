@@ -7,7 +7,7 @@ import { invoiceSchema, InvoiceFormValues } from "../schemas/invoice";
 
 export function NewInvoiceSheet() {
   const [open, setOpen] = useState(false);
-  const { createInvoice } = useInvoices();
+  const createInvoice = useInvoices((state) => state.createInvoice);
   
   // Basic state for the form, you'd use react-hook-form in production
   const [formData, setFormData] = useState<Partial<InvoiceFormValues>>({});
@@ -31,7 +31,7 @@ export function NewInvoiceSheet() {
     if (!result.success) {
       const formattedErrors: Record<string, string> = {};
       result.error.issues.forEach(issue => {
-        formattedErrors[issue.path[0]] = issue.message;
+        formattedErrors[issue.path[0] as string] = issue.message;
       });
       setErrors(formattedErrors);
       return;
