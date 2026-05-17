@@ -2,46 +2,53 @@ import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { fileURLToPath } from "url";
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient, Prisma } from "@prisma/client";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Initialize Prisma
-const prisma = new PrismaClient();
+// Global Admin Client (No RLS) -> Used ONLY for systemic tasks or verify-checks 
+export const prismaAdmin = new PrismaClient();
 
-// High-Performance "Row Level Security" using Prisma Client Extensions (Mock implementation)
-// In Neon/Postgres, this would translate to:
-// await prisma.$executeRaw`SELECT set_config('app.current_user_id', ${userId}, TRUE)`
+import { AsyncLocalStorage } from "async_hooks";
+import { EventEmitter } from "events";
+export const requestContext = new AsyncLocalStorage<{ userId: string }>();
+
+export const systemEvents = new EventEmitter();
+export const SERVICE_SECRET = process.env.SERVICE_SECRET || "default_service_secret_uuid";
+
+// High-Performance Native Postgres RLS via Prisma Client Extensions
 function getPrismaForUser(userId: string) {
-  return prisma.$extends({
+  if (userId === SERVICE_SECRET) {
+      throw new Error("Forbidden: Cannot masquerade as service role.");
+  }
+  return prismaAdmin.$extends({
     query: {
       $allModels: {
-        async $allOperations({ args, query, model }) {
-          // Automatic tenant scoping for all relevant queries to prevent data leakage
-          // This ensures developers cannot accidentally fetch another user's data
-          if (["Invoice", "Project", "Client", "BankTransaction"].includes(model)) {
-            args.where = { ...args.where, ownerId: userId };
-          }
-           // MOCK: Since we don't have a real DB running, we return mock data just to complete the scaffolding
-           // Normally we would `return query(args);`
-           if (model === "Invoice") {
-             if (args.where?.id) {
-               return [{ id: args.where.id, number: "MOCK-1", amount: 1200 }];
-             }
-           }
-           return query(args);
+        async $allOperations({ args, query }) {
+          // Optimization: By executing set_config in a block, it costs one round trip.
+          // To truly optimize connection pools, you'd use Prisma's interactive transactions
+          // OR an extended PgBouncer setup. For here, we enforce `is_local = TRUE`.
+          const [, result] = await prismaAdmin.$transaction([
+            prismaAdmin.$executeRawUnsafe(
+                `SELECT set_config('app.current_user_id', $1, TRUE), set_config('app.service_secret', $2, TRUE)`, 
+                userId, 
+                SERVICE_SECRET
+            ),
+            query(args) as any
+          ]);
+          return result;
         },
       },
     },
-  }) as unknown as typeof prisma;
+  }) as unknown as PrismaClient; // Cast to bypass complex type inference
 }
 
 // Extend Express Request
 declare global {
   namespace Express {
     interface Request {
-      prisma: typeof prisma;
+      prisma: PrismaClient;
       userId: string;
     }
   }
@@ -83,6 +90,10 @@ async function startServer() {
     }
   }
 
+  systemEvents.on("sse_broadcast", (eventName, data) => {
+    broadcastEvent(eventName, data);
+  });
+
   // API Routes
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok", version: "2026.1" });
@@ -102,27 +113,20 @@ async function startServer() {
     }, 400); // 400ms server response
   });
 
-  // Background Worker Reconciler Stub
+  // Background Worker Reconciler
   app.post("/api/ai/reconcile", async (req, res) => {
-    const { transaction, invoices } = req.body;
+    const { transaction } = req.body;
     
     // Ack immediately to frontend queue
     res.json({ status: "queued", transactionId: transaction.id });
     
-    // Simulate isolated background worker
-    setTimeout(() => {
-      console.log(`[Worker] Executing reconciliation plan for TTL: ${transaction.id}`);
-      
-      const payload = {
-        transactionId: transaction.id,
-        match: invoices[0] || null,
-        confidence: 0.98,
-        reasoning: "Strict metadata reference identified in Stripe payload.",
-        status: "completed"
-      };
-      
-      broadcastEvent("reconciliation_success", payload);
-    }, 2500); // Background job takes 2.5 seconds
+    // Asynchronously call the actual worker process
+    setTimeout(async () => {
+      // Lazy load to avoid circular dependencies during boot
+      const { AgenticReconciler } = await import("./src/features/ai/services/AgenticReconciler.js");
+      const reconciler = new AgenticReconciler();
+      await reconciler.processTransaction(transaction.id);
+    }, 0);
   });
 
   // Vite middleware for development
@@ -139,6 +143,50 @@ async function startServer() {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
+
+  // ----------------------------------------------------------------------
+  // CENTRALIZED ERROR HANDLING MIDDLEWARE & RLS LEAK DETECTOR
+  // ----------------------------------------------------------------------
+  app.use(async (err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error(`[Error Middleware] Caught error on ${req.method} ${req.url}`);
+    
+    // Check if the error is a Prisma "Record Not Found" error
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2025") {
+       // A required record was not found. This could be a 404 OR an RLS security violation.
+       
+       const modelName = (err.meta?.modelName as string) || "Record";
+       const requestedId = req.params?.id || req.body?.id;
+       
+       if (requestedId && modelName) {
+         try {
+           // Use the ADMIN client (bypassing RLS) to see if the record ACTUALLY exists
+           // This requires lowercase model name to match Prisma's delegate properties (e.g. prismaAdmin.invoice)
+           const modelDelegate = (prismaAdmin as any)[modelName.toLowerCase()];
+           if (modelDelegate && typeof modelDelegate.findUnique === 'function') {
+               const existsGlobally = await modelDelegate.findUnique({ where: { id: requestedId } });
+               
+               if (existsGlobally) {
+                  // SECURITY VIOLATION! Record exists, but RLS hid it from this user.
+                  console.error(`[SECURITY ALERT] User ${req.userId} attempted to access ${modelName} ${requestedId} belonging to another tenant!`);
+                  // Log the violation to SIEM/Audit Logging tool here
+                  
+                  // Return a generic 404 to the client to obscure existence
+                  res.status(404).json({ error: "Not Found", message: `${modelName} not found` });
+                  return;
+               }
+           }
+         } catch (adminErr) {
+           console.error("Admin client check failed", adminErr);
+         }
+       }
+       
+       // Standard 404
+       res.status(404).json({ error: "Not Found", message: `${modelName} not found.` });
+       return;
+    }
+
+    res.status(500).json({ error: "Internal Server Error", message: err.message });
+  });
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`CreatorOS Engine running on http://0.0.0.0:${PORT}`);

@@ -82,6 +82,7 @@ enum InvoiceStatus {
   PAID
   OVERDUE
   VOID
+  RECONCILED
 }
 
 model BankTransaction {
@@ -91,6 +92,7 @@ model BankTransaction {
   description     String
   reference       String?
   reconciled      Boolean  @default(false)
+  confidenceScore Float?
   invoiceId       String?
   invoice         Invoice? @relation(fields: [invoiceId], references: [id])
   createdAt       DateTime @default(now())

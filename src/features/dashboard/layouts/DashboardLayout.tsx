@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Outlet, Link, useLocation } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   LayoutDashboard,
   Users,
@@ -11,6 +11,7 @@ import {
   Settings,
   Bell,
   ChevronRight,
+  TerminalSquare
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CommandMenu } from "@/features/dashboard/components/CommandMenu";
@@ -27,6 +28,7 @@ const navItems = [
 
 export default function DashboardLayout() {
   const location = useLocation();
+  const [agentLogs, setAgentLogs] = useState<{message: string, timestamp: number}[]>([]);
 
   useEffect(() => {
     const eventSource = new EventSource("/api/stream");
@@ -39,9 +41,14 @@ export default function DashboardLayout() {
       try {
         const data = JSON.parse(e.data);
         console.log("Background worker completed:", data);
-        // We could trigger a toast or optimistically update a table here
-        // To keep it simple, we just dispatch a custom event
         window.dispatchEvent(new CustomEvent("ai_reconciliation_complete", { detail: data }));
+      } catch (err) {}
+    });
+
+    eventSource.addEventListener("agent_log", (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        setAgentLogs((prev) => [...prev, data].slice(-15)); // Keep last 15 logs
       } catch (err) {}
     });
 
@@ -53,7 +60,7 @@ export default function DashboardLayout() {
   return (
     <div className="flex h-screen bg-[#09090b] text-[#fafafa] font-sans selection:bg-zinc-800 overflow-hidden">
       {/* Sidebar */}
-      <aside className="w-60 border-r border-zinc-800 bg-[#09090b] flex flex-col hidden md:flex">
+      <aside className="w-64 border-r border-zinc-800 bg-[#09090b] flex flex-col hidden md:flex">
         <div className="p-4 flex items-center gap-3 border-b border-zinc-800">
           <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center shadow-[0_0_15px_rgba(79,70,229,0.4)]">
             <div className="w-4 h-4 border-2 border-white rounded-sm"></div>
@@ -61,7 +68,7 @@ export default function DashboardLayout() {
           <span className="font-semibold tracking-tight text-sm uppercase">CreatorOS</span>
         </div>
 
-        <nav className="flex-1 p-3 space-y-1">
+        <nav className="p-3 space-y-1">
           {navItems.map((item) => {
             const isActive = location.pathname === item.href;
             return (
@@ -81,6 +88,29 @@ export default function DashboardLayout() {
             );
           })}
         </nav>
+
+        {/* Live Agent Logs Terminal */}
+        <div className="flex-1 p-3 flex flex-col min-h-[150px] overflow-hidden mt-2">
+          <div className="flex items-center gap-2 px-1 mb-2">
+            <TerminalSquare className="w-3 h-3 text-emerald-400" />
+            <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Live Agent Core</span>
+          </div>
+          <div className="bg-[#050505] border border-zinc-800/50 rounded-md p-2 flex-1 overflow-y-auto font-mono text-[9px] text-emerald-500/80 space-y-1 relative">
+            {agentLogs.length === 0 ? (
+              <div className="opacity-50 italic">Agent standing by...</div>
+            ) : (
+              agentLogs.map((log, i) => (
+                <div key={i} className="break-words">
+                  <span className="text-zinc-600 select-none mr-1">
+                    {new Date(log.timestamp).toISOString().split('T')[1].slice(0,-1)}
+                  </span>
+                  &gt; {log.message}
+                </div>
+              ))
+            )}
+            <div className="animate-pulse absolute bottom-2 left-2 block w-1.5 h-3 bg-emerald-500/50"></div>
+          </div>
+        </div>
 
         <div className="p-4 border-t border-zinc-800 bg-[#0c0c0e]">
           <div className="flex items-center gap-3">
@@ -137,7 +167,7 @@ export default function DashboardLayout() {
               <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
               System Operational
             </div>
-            <div>v1.04.12-production</div>
+            <div>v1.05.00-production</div>
           </div>
           <div className="flex items-center gap-4">
             <span className="hover:text-zinc-300 cursor-pointer">API Docs</span>
